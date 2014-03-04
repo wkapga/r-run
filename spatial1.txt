@@ -1,0 +1,77 @@
+library(sp)
+library(dismo)
+ 
+# some addresses in Austria
+# pts <- geocode(c("Aldrans, Grubenweg", "Wien, Stephansdom", "Salzburg, Mozartplatz"))
+ 
+pts=data.frame(cbind(pp$lon,pp$lat))
+ 
+# make pts spatial
+#coords <- SpatialPoints(pts[, c("longitude", "latitude")])
+cc=SpatialPoints(pts)
+coords = cbind(cc$lon,cc$lat)
+
+coords = cbind(pp$lon,pp$lat)
+
+spdf_pts <- SpatialPointsDataFrame(coords, pts)
+ 
+# assign CRS/projection (which is WGS 1984)
+crs <- CRS(" +proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+proj4string(spdf_pts) <- crs
+  
+# spatial data to extract (altitude)
+alt <- getData('alt', country = "AT")
+ 
+# convert alt from raster to grid (needed for over::sp)
+# and assign CRS (which is the same as spdf_pts, see > alt@crs)
+# don't mind warning - the CRS is the same..
+spdf_alt <- as(alt, 'SpatialGridDataFrame')
+proj4string(spdf_alt) <- crs
+ 
+# view
+plot(alt)
+# plot pts on top
+plot(spdf_pts, cex = 2, col = 2, add = T)
+  
+# check data
+str(spdf_pts)
+str(spdf_alt)
+  
+# get the raster/pixel/grid data (> ?over):
+cbind(spdf_pts$interpretedPlace, over(spdf_pts, spdf_alt))
+
+myalt = as.numeric(unlist(over(spdf_pts, spdf_alt)))
+plot(pp$dis,myalt)
+
+
+###########
+bb <- qbbox(pp$lat[1:100], pp$lon[1:100])
+
+ # http://data.wien.gv.at/daten/geoserver/ows?version=1.3.0&service=WMS&request=GetMap&crs=EPSG:4326&bbox=48.14768,16.30564%20,48.16791,16.36195&width=1&height=1&layers=ogdwien:GELAENDEOGD&styles=&format=application/rss+xml
+
+# http://data.wien.gv.at/daten/geoserver/ows?version=1.3.0&service=WMS&request=GetMap&crs=EPSG:4326&bbox=48.16615,16.3537,%2048.16699,16.35443&width=1&height=1&layers=ogdwien:GELAENDEOGD&styles=&format=application/rss+xml
+ 
+# http://data.wien.gv.at/daten/geoserver/ows?version=1.3.0&service=WMS&request=GetMap&crs=EPSG:4326&bbox=48.16615,16.3537,48.16699,16.354438&width=1&height=1&layers=ogdwien:GELAENDEOGD&styles=&format=application/vnd.google-earth.kml+xml
+ 
+####### 
+ 
+# http://data.wien.gv.at/daten/geoserver/ows?version=1.3.0&service=WMS&request=GetMap&crs=EPSG:4326&bbox=48.16615,16.3537, 48.16699,16.35443&width=1&height=1&layers=ogdwien:GELAENDEOGD&styles=&format=application/rss+xml
+aa = readOGR("K:/AM/GFI/wkapga/proj/R/g/test1.kml",layer="ogdwien:GELAENDEOGD")
+
+library(stringr)
+bb = aa[[2]]
+cc = str_extract_all(bb,"\\(?[0-9,.]+\\)?")
+dd = sapply(cc,"[[",5)
+	aa[[2]] = as.numeric(dd)
+
+pdaa=data.frame(aa@coords)
+ ggplot(pdaa,aes(x = coords.x1, y= coords.x2,colour= coords.x3)) + geom_point()
+
+
+ 
+#library(XML)
+
+#rss1 <- xmlInternalTreeParse("K:/AM/GFI/wkapga/proj/R/g/tmp1rss.xml")
+#xpathSApply(check, "//timeStamp", xmlValue)
+
+

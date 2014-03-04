@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>gpx import</title>
+</head>
+<body>
+
+ 
+
+<!--begin.rcode
+      opts_chunk$set( dpi=96, fig.width=8, fig.height=8, dev="png")
+    
+ end.rcode-->    
+
+  <p>Getting the data and plot</p>
+
+<!--begin.rcode
+    
+    setwd("K:/AM/GFI/wkapga/proj/R/g")
+	# setwd("C:\\zztmp\\R\\git\\rstuff\\g")
+
+	# knit("endo1.Rhtml")
+	library(plotKML)
+	library(sp)
+	library(ggplot2)
+	library(OpenStreetMap)
+
+
+	my.gpx =   readGPX("20140223_123650.gpx", metadata = FALSE, bounds = FALSE)
+
+	trail = sapply(my.gpx$tracks,"[[",1)
+
+	ti = as.POSIXct(strptime(trail[[3]],"%Y-%m-%dT%H:%M:%SZ"))
+
+	pp = data.frame(lon=trail[[1]],lat=trail[[2]],tim=ti, hr= as.numeric(as.character((trail[[4]])))   )
+
+	qplot(as.numeric(pp$tim-pp$tim[1],units="hours"), pp$hr)
+
+	#plot track 
+	qplot(lon, lat, data = pp, colour = hr) + scale_colour_gradientn(colours=rev(rainbow(4)))
+
+	# todo: speed calc
+
+	#tt1=spDists(cbind(pp$lon,pp$lat),longlat=TRUE)
+	#pp$dis =c(0, cumsum(tt1[row(tt1)==col(tt1)+1]))
+	#rm(t1)
+
+	j=length(pp$lon)
+	tt= cbind(head(cbind(pp$lon,pp$lat),j-1),tail(cbind(pp$lon,pp$lat),j-1))
+	pp$dis =cumsum( c(0, apply(tt, 1, function(x) spDists(rbind(x[1:2],x[3:4]), longlat=TRUE)[2] )))
+	rm(tt)
+	
+	
+	kms=unlist(lapply((1:floor(tail(pp$dis,1))),function(x) which.min(abs(pp$dis-x)) ) )
+	
+	
+	lg = 200
+	spd =   diff( as.numeric(pp$tim), lag=lg) / diff(pp$dis, lag=lg) / 60
+
+	pp$spd = c(rep(spd[1],lg),spd)
+#	spd1 = (filter(spd,rep(1/30,30), sides=1))
+
+	qplot(lon, lat, data = pp, colour = spd) + scale_colour_gradientn(colours=rev(rainbow(4)))
+
+	
+	# ggplot(pp, aes(x=lon,y=lat)) + geom_point(x=pp$lon[kms],y=pp$lon[kms])
+  ggplot(data=pp, aes(x=lon,y=lat)) +
+    geom_point(aes(x= lon,y= lat), colour="blue",alpha=0.1) +  
+    geom_point(data=pp[kms,], aes(x= lon,y= lat), colour= "black",size=9, shape=21) +
+	geom_text(data=pp[kms,], aes(x= lon,y= lat,label=round(dis,0) ) )
+
+	
+	# todo: elevation data
+	# http://www.inside-r.org/packages/cran/raster/docs/getData
+
+  
+
+	 end.rcode-->  

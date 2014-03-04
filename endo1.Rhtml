@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>gpx import</title>
+</head>
+<body>
+
+<!--begin.rcode  echo=FALSE
+      opts_chunk$set( dpi=96, fig.width=10, fig.height=6, dev="png")
+    
+ end.rcode-->    
+
+  <p>Facts about the track:</p>
+
+<!--begin.rcode echo=FALSE
+    
+    # setwd("K:/AM/GFI/wkapga/proj/R/g")
+	# setwd("C:\\zztmp\\R\\git\\rstuff\\g")
+	# library(knitr)
+	# knit("endo1.Rhtml")
+	
+	library(plotKML)
+	library(sp)
+	library(ggplot2)
+	library(raster)
+	library(RgoogleMaps)
+	library(ggmap)
+	library(gridExtra)
+	library(RColorBrewer)
+	
+	library(plyr)
+	library(XML)
+
+	trk = c("20130803_032753.gpx","test1.gpx","test2.gpx","test3.gpx",
+	"20140215_113511.gpx","20140223_123650.gpx","20140215_113511.tcx",
+	"20140301_085944.tcx")
+	
+	i= grep("20140223",trk)
+	# i=5
+	
+	
+	if ( grepl( "tcx", trk[i]) == 1 ) {
+	doc = xmlParse(trk[i])
+	nodes <- getNodeSet(doc, "//ns:Trackpoint", "ns")
+    pp  <- plyr::ldply(nodes, as.data.frame(xmlToList))
+    # setNames(mydf, c('time', 'lat', 'long', 'alt', 'distance'))
+	names(pp) = sub("^value.","",names(pp))
+	names(pp) = sub("Position.LatitudeDegrees","lat",names(pp))
+	names(pp) = sub("Position.LongitudeDegrees","lon",names(pp))
+	names(pp) = sub("AltitudeMeters","ele_org",names(pp))
+	names(pp) = sub("Value","hr",names(pp))
+	names(pp) = sub("Time","tim",names(pp))
+	pp$tim=as.POSIXct(strptime(pp$tim,"%Y-%m-%dT%H:%M:%SZ") )
+	pp$hr= as.numeric(as.character(pp$hr))
+	pp$lon= as.numeric(as.character(pp$lon))
+	pp$lat= as.numeric(as.character(pp$lat))
+	pp$ele_org= as.numeric(as.character(pp$ele_org))
+	}
+	
+	if ( grepl( "gpx", trk[i]) == 1 ) {
+	my.gpx =   readGPX(trk[i], metadata = FALSE, bounds = FALSE)
+	
+	trail = sapply(my.gpx$tracks,"[[",1)
+    trailnames = dimnames(trail)[[1]]  #list of data in track
+    
+	ti = as.POSIXct(strptime(trail[[match("time",trailnames)]],"%Y-%m-%dT%H:%M:%SZ"))  
+	
+	pp = data.frame(lon=trail[[match("lon",trailnames)]],lat=trail[[match("lat",trailnames)]],
+	       tim=ti, hr= as.numeric(as.character((trail[[match("extensions",trailnames)]])))   )
+	
+	# load original elevation data if there are any
+	if ( "ele" %in% trailnames ) { pp$ele_org = trail[[match("ele",trailnames)]] }
+	}
+	
+	
+    # duration in hours
+	pp$dur = as.numeric(pp$ti - pp$ti[1], unit= "hours")
+	
+	# distance calculation
+	j=length(pp$lon)
+	tt= cbind(head(cbind(pp$lon,pp$lat),j-1),tail(cbind(pp$lon,pp$lat),j-1))
+	pp$dis =cumsum( c(0, apply(tt, 1, function(x) spDists(rbind(x[1:2],x[3:4]), longlat=TRUE)[2] )))
+	rm(tt)
+	
+	# speed, smoothed
+	w=0.2 # 100m in both directions
+	pp$spd = apply( as.matrix(pp$dis),1,function(x) { 
+	  l1 = which.min(abs(pp$dis-(x-w))) 
+	  l2 = which.min(abs(pp$dis-(x+w))) 
+	  x = (pp$tim[l2] - pp$tim[l1] ) / (pp$dis[l2] - pp$dis[l1] )
+    } )
+	l1= which.min(abs(pp$dis - w/2 ))  # beginn of track + 100m
+	pp$spd[1:l1] = rep(pp$spd[l1],l1)
+    l1= which.min(abs(pp$dis - (max(pp$dis)-w/2 )) )  # end of track - 100m
+	l2 = length(pp$spd)
+	pp$spd[l1:l2] = rep(pp$spd[l1],l2-l1+1)
+    
+		
+	# get elevation data
+	rr = getData('SRTM', lon=17, lat=48, download=FALSE)
+    pp$ele = extract(rr,   cbind(pp$lon,pp$lat), method= "bilinear" )
+    
+	# smooth elevation: calc average over window of 200m
+	
+	w=0.2 # 100m in both directions
+	pp$ele = apply( as.matrix(pp$dis),1,function(x) mean(pp$ele[ (pp$dis>(x-w) & (pp$dis <(x+w))) ] ) )
+	
+	
+	# smooth & calc sum of ups and downs, 
+	dd = diff(pp$ele,lag=1)
+	dd1 = sum(dd[dd>0])   # Sum of ups
+	dd2 = sum(dd[dd<0])   # Sum of Downs
+	pp$upd = c( 0, dd)  # needed for adjusted distance, speed
+	
+	# find the full km for km-marks
+	kms=unlist(lapply((1:floor(tail(pp$dis,1))),function(x) which.min(abs(pp$dis-x)) ) )
+	
+	# adjust distance for elevation
+	pp$dis_cor = pp$dis + cumsum ( ifelse(pp$upd>0,5* pp$upd, 2*  pp$upd) /1000 )  # 100 HM up is  + 0,5km
+
+	# adjust speed for elevation
+	lg = 200
+	spd =   diff( as.numeric(pp$tim), lag=lg) / diff(pp$dis_cor, lag=lg) / 60
+	pp$spd_cor = c(rep(spd[1],lg),spd)
+	
+	# speed, smoothed
+	w=0.2 # 100m in both directions
+	pp$spd_cor = apply( as.matrix(pp$dis_cor),1,function(x) { 
+	  l1 = which.min(abs(pp$dis_cor-(x-w))) 
+	  l2 = which.min(abs(pp$dis_cor-(x+w))) 
+	  x = (pp$tim[l2] - pp$tim[l1] ) / (pp$dis_cor[l2] - pp$dis_cor[l1] )
+    } )
+	l1= which.min(abs(pp$dis_cor - w/2 ))  # beginn of track + 100m
+	pp$spd_cor[1:l1] = rep(pp$spd_cor[l1],l1)
+    l1= which.min(abs(pp$dis_cor - (max(pp$dis_cor)-w/2 )) )  # end of track - 100m
+	l2 = length(pp$spd_cor)
+	pp$spd_cor[l1:l2] = rep(pp$spd_cor[l1],l2-l1+1)
+	
+	
+	# adjust km for elevation
+	kms_cor=unlist(lapply((1:floor(tail(pp$dis_cor,1))),function(x) which.min(abs(pp$dis_cor-x)) ) )
+		
+	#### OUTPUT ####	
+		
+	### Facts about the track
+	
+	d1=floor(tail(pp$dur,1))
+	d2 = floor( (tail(pp$dur,1) - d1 ) * 60 )
+	d3= (( (tail(pp$dur,1) - d1 ) * 60 ) - d2) * 60
+	
+	message("Started at ",pp$ti[1])
+	message("Duration: ",sprintf("%d h %0d m %0.f s ",d1,d2,d3    ))
+	message("Distance: ",sprintf("%2.1f",tail(pp$dis,1)), " km")
+	message("Altitude Range: ",sprintf("%3.f",min(pp$ele))," m to ", sprintf("%3.f",max(pp$ele)), "m ->",
+	   sprintf("%3.f", max(pp$ele) - min(pp$ele)) ," m")
+	message("Climb: ",  sprintf("%3.f",dd1) , " m")
+	message("Descent: ",  sprintf("%3.f",dd2) , " m")
+	message("Avg. Heartrate: ",  sprintf("%3.f",mean(pp$hr) , " m") )
+	message("Heartrate Range: ",  sprintf("%3.f to %3.f",min(pp$hr) , max(pp$hr)) )
+	
+	##### PLOTS #####
+ 	
+     end.rcode-->    
+
+	  
+    <!--begin.rcode echo=FALSE
+      opts_chunk$set( dpi=96, fig.width=14, fig.height=8, dev="png")
+    end.rcode--> 	
+	
+	<!--begin.rcode echo=FALSE
+      opts_chunk$set( dpi=96, fig.width=10, fig.height=6, dev="png")
+	
+    # plot track with colourcoded HR
+	cc = brewer.pal(n=9,"RdBu")
+	
+	bb <- qbbox(pp$lat, pp$lon,margin = list(m = c(10, 10, 10, 10), TYPE = c("perc", "abs")[1]) )
+	mp = get_map(location = c( mean(bb$lonR), mean(bb$latR) ), maptype="roadmap", zoom=13)
+	ggmap(mp) +  
+	  geom_point(data=pp, aes(x= lon,y= lat, colour=spd_cor ),  alpha=0.8) +
+	  # scale_colour_gradientn(colours=rev(rainbow(2))) +
+      scale_colour_gradient(low=cc[1],high=cc[9]) +      
+	 geom_point(data=pp[kms_cor,], aes(x= lon,y= lat), colour= "black", size=9, shape=21) +
+	  geom_text(data=pp[kms_cor,], aes(x= lon, y= lat, label=round(dis,0) ) )
+
+	   end.rcode-->    
+
+	  
+ <!--begin.rcode echo=FALSE
+      opts_chunk$set( dpi=96, fig.width=10, fig.height=6, dev="png")
+    
+	# plot heart rate, speed, adj. speed over time
+	vplayout <- function(x, y) viewport(layout.pos.row = x, layout.pos.col = y)
+	
+	p1 <- ggplot(data=pp,aes(x=dur, y=hr)) +
+	  geom_line() 
+	p2 <- ggplot(data=pp,aes(x=dur, y=spd)) +
+	  geom_line(aes(y=spd), colour="blue") +
+	  geom_line(aes(y=spd_cor), colour="red") +
+	  scale_y_reverse()
+	pushViewport(viewport(layout = grid.layout(2, 1)))
+	print(p1, vp = vplayout(1, 1))
+    print(p2, vp = vplayout(2, 1))
+	
+	# plot track with colourcoded speed 
+	qplot(lon, lat, data = pp, colour = spd) + scale_colour_gradientn(colours=rev(rainbow(4)))
+	# plot track with colourcoded HR
+	#qplot(lon, lat, data = pp, colour = hr) + scale_colour_gradientn(colours=rev(rainbow(4)))
+	
+	# plot track with colourcoded elevation
+    qplot(lon, lat, data = pp, colour = ele) + 
+	  scale_colour_gradient(low="green",high="blue") + 
+	  labs( title = "Elevation")
+	
+	# plot track with adjusted speed and marks for every km
+	ggplot(data=pp, aes(x=lon,y=lat)) +
+      geom_point(aes(x= lon,y= lat, colour=spd_cor ),  alpha=0.8) +  
+	  scale_colour_gradientn(colours=rev(rainbow(2))) +
+      geom_point(data=pp[kms_cor,], aes(x= lon,y= lat), colour= "black", size=9, shape=21) +
+	  geom_text(data=pp[kms_cor,], aes(x= lon, y= lat, label=round(dis,0) ) )
+	
+	# plot hr over adj.speed without km 1 & 2
+	
+	ggplot(data = tail(pp, length(pp$hr) - kms[2]), aes(x = spd, y = hr)) + 
+      geom_point(aes(colour = dis))
+
+	ggplot(data = tail(pp, length(pp$hr) - kms_cor[2]), aes(x = spd_cor, y = hr)) + 
+      geom_point(aes(colour = dis_cor))
+	
+	
+	# plot elevation, plot elevation_org vs interpolation
+	ggplot(data=pp, aes(x=dis, y=ele)) +
+	 geom_line() 
+
+	if (exists("pp$ele_org") ){
+	ggplot(data=pp, aes(x=dis, y=ele)) +
+	 geom_line() +
+	 geom_line(aes(y=as.numeric(ele_org)), colour="red" )
+	}
+	
+    # plot track on googlemaps
+	# bb <- qbbox(pp$lat, pp$lon,margin = list(m = c(10, 10, 10, 10), TYPE = c("perc", "abs")[1]) )
+    # zo = 13 # TODO: dynamic
+    # map <- GetMap.bbox(bb$lon, bb$lat,zoom=zo,maptype="mobile")
+    # PlotOnStaticMap(map,lon=pp$lon ,lat=pp$lat,col="blue", FUN=lines, verbose=0)
+
+	
+	
+
+	
+	 end.rcode-->  
